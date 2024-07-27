@@ -77,16 +77,21 @@ class ReminderCommand(private val config: Config, private val timer: Timer) : Co
             return
         }
 
-        val time = LocalTime.parse(timeXmessage[0])
+        val time = LocalTime.parse(timeXmessage[0]).withSecond(0).minusMinutes(config.offsetInMinutes)
         val now = LocalTime.now()
         if (now.isAfter(time)) {
-            matrixBot.room().sendMessage(roomId) { text("Time ($time) is in the past. I can only remind you at the same day :)") }
+            matrixBot.room()
+                .sendMessage(roomId) {
+                    text(
+                        "Time $time is in the past. I can only remind you at the same day :) Also remember that I'll inform you ${config.offsetInMinutes} min before :)"
+                    )
+                }
             return
         }
 
         val timelineEvent = matrixBot.getTimelineEvent(roomId, textEventId) ?: return
 
-        val timerData = TimerData(matrixBot, roomId, textEventId, time, null)
+        val timerData = TimerData(matrixBot, roomId, textEventId, time, timeXmessage[1], null)
         timers.add(timerData)
 
         matrixBot.room().sendMessage(roomId) {
@@ -165,7 +170,7 @@ class ReminderCommand(private val config: Config, private val timer: Timer) : Co
             val timelineEvent = matrixBot.getTimelineEvent(roomId, messageId) ?: return
             matrixBot.room().sendMessage(roomId) {
                 reply(timelineEvent)
-                text("Reminder for ${peopleToRemind.joinToString(", ")}")
+                text("'${timer.content}' ${peopleToRemind.joinToString(", ")}")
             }
         } catch (e: Exception) {
             logger.error("Error during remind: ${e.message}", e)
@@ -177,6 +182,7 @@ class ReminderCommand(private val config: Config, private val timer: Timer) : Co
         val roomId: RoomId,
         val requestMessage: EventId,
         val timeToRemind: LocalTime,
+        val content: String,
         var botMessageId: EventId?
     )
 }

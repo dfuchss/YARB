@@ -28,7 +28,7 @@ data class Config(
     @JsonProperty override val dataDirectory: String,
     @JsonProperty override val admins: List<String>,
     @JsonProperty override val users: List<String> = listOf(),
-    @JsonProperty("offset_in_minutes") val offsetInMinutes: Int = 0
+    @JsonProperty("offset_in_minutes") val offsetInMinutes: Long = 0
 ) : IConfig {
     companion object {
         private val log: Logger = LoggerFactory.getLogger(Config::class.java)
@@ -47,6 +47,13 @@ data class Config(
             log.info("Loaded config ${configFile.absolutePath}")
             config.validate()
             return config
+        }
+    }
+
+    override fun validate() {
+        super.validate()
+        if (offsetInMinutes < 0) {
+            error("Offset must be greater or equal to 0.")
         }
     }
 }
