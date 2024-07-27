@@ -28,8 +28,14 @@ private lateinit var commands: List<Command>
 fun main() {
     runBlocking {
         val config = Config.load()
+
+        val matrixClient = getMatrixClient(config)
+        val matrixBot = MatrixBot(matrixClient, config)
+
         val timer = Timer(true)
-        val reminderCommand = ReminderCommand(config, timer)
+        val timerManager = TimerManager(matrixBot, timer, config)
+
+        val reminderCommand = ReminderCommand(config, timerManager)
         commands =
             listOf(
                 HelpCommand(config, "YARB") {
@@ -40,10 +46,6 @@ fun main() {
                 ChangeUsernameCommand(),
                 reminderCommand
             )
-
-        val matrixClient = getMatrixClient(config)
-
-        val matrixBot = MatrixBot(matrixClient, config)
 
         // Command Handling
         matrixBot.subscribeContent { event -> handleCommand(commands, event, matrixBot, config, ReminderCommand.COMMAND_NAME) }

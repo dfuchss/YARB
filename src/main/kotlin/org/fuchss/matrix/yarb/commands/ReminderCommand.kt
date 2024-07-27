@@ -1,8 +1,5 @@
 package org.fuchss.matrix.yarb.commands
 
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
-import net.folivo.trixnity.client.room.getTimelineEventReactionAggregation
 import net.folivo.trixnity.client.room.message.react
 import net.folivo.trixnity.client.room.message.reply
 import net.folivo.trixnity.client.room.message.text
@@ -14,50 +11,20 @@ import net.folivo.trixnity.core.model.events.m.RelationType
 import net.folivo.trixnity.core.model.events.m.room.RoomMessageEventContent
 import org.fuchss.matrix.bots.MatrixBot
 import org.fuchss.matrix.bots.command.Command
-import org.fuchss.matrix.bots.matrixTo
 import org.fuchss.matrix.yarb.Config
-import org.fuchss.matrix.yarb.emoji
+import org.fuchss.matrix.yarb.TimerManager
 import java.time.LocalTime
-import java.util.Timer
-import java.util.TimerTask
-import kotlin.time.Duration.Companion.minutes
 
-class ReminderCommand(private val config: Config, private val timer: Timer) : Command() {
+class ReminderCommand(private val config: Config, private val timerManager: TimerManager) : Command() {
     companion object {
         const val COMMAND_NAME = "new"
         private val TIME_REGEX = Regex("^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$")
-        private val EMOJI = ":+1:".emoji()
+        private val EMOJI = TimerManager.EMOJI
     }
 
     override val help: String = "Set a reminder for a specific time."
     override val params: String = "<time|11:30> <message|Time for Lunch!>"
     override val name: String = COMMAND_NAME
-
-    private val timers = mutableListOf<TimerData>()
-
-    init {
-        val millisecondsToNextMinute = (60 - LocalTime.now().second) * 1000L
-        timer.schedule(
-            object : TimerTask() {
-                override fun run() {
-                    runBlocking {
-                        logger.debug("Reminders: {}", timers)
-                        val timerCopy = timers.toList()
-                        val now = LocalTime.now()
-                        for (timer in timerCopy) {
-                            if (timer.timeToRemind.isAfter(now)) {
-                                continue
-                            }
-                            timers.remove(timer)
-                            remind(timer)
-                        }
-                    }
-                }
-            },
-            millisecondsToNextMinute,
-            1.minutes.inWholeMilliseconds
-        )
-    }
 
     override suspend fun execute(
         matrixBot: MatrixBot,
@@ -90,9 +57,7 @@ class ReminderCommand(private val config: Config, private val timer: Timer) : Co
         }
 
         val timelineEvent = matrixBot.getTimelineEvent(roomId, textEventId) ?: return
-
-        val timerData = TimerData(matrixBot, roomId, textEventId, time, timeXmessage[1], null)
-        timers.add(timerData)
+        timerManager.addTimer(roomId, textEventId, time, timeXmessage[1])
 
         matrixBot.room().sendMessage(roomId) {
             reply(timelineEvent)
@@ -117,9 +82,11 @@ class ReminderCommand(private val config: Config, private val timer: Timer) : Co
             return
         }
 
-        val timerData = this.timers.find { it.roomId == roomId && it.requestMessage == relatesTo.eventId } ?: return
+        val isRelated = timerManager.addBotMessageToTimer(relatesTo.eventId, eventId)
+        if (!isRelated) {
+            return
+        }
 
-        timerData.botMessageId = eventId
         matrixBot.room().sendMessage(roomId) {
             react(eventId, EMOJI)
         }
@@ -138,12 +105,9 @@ class ReminderCommand(private val config: Config, private val timer: Timer) : Co
             return
         }
 
-        val timerData = this.timers.find { it.roomId == roomId && it.requestMessage == relatesTo.eventId } ?: return
-        timers.remove(timerData)
+        val relatedBotMessage = this.timerManager.removeByRequestMessage(relatesTo.eventId) ?: return
 
-        if (timerData.botMessageId != null) {
-            matrixBot.roomApi().redactEvent(roomId, timerData.botMessageId!!).getOrThrow()
-        }
+        matrixBot.roomApi().redactEvent(roomId, relatedBotMessage).getOrThrow()
 
         val replace = (textEvent.relatesTo as? RelatesTo.Replace) ?: return
         val newBody = (replace.newContent as? RoomMessageEventContent.TextBased.Text)?.body ?: return
@@ -154,35 +118,4 @@ class ReminderCommand(private val config: Config, private val timer: Timer) : Co
         }
         execute(matrixBot, senderId, roomId, parameters, replace.eventId, textEvent)
     }
-
-    private suspend fun remind(timer: TimerData) {
-        try {
-            val matrixBot = timer.matrixBot
-            val roomId = timer.roomId
-            val messageId = timer.botMessageId ?: return
-
-            val reactions = matrixBot.room().getTimelineEventReactionAggregation(roomId, messageId).first().reactions
-            val peopleToRemind = reactions[EMOJI]?.filter { it != matrixBot.self() }?.map { it.matrixTo() }
-            if (peopleToRemind.isNullOrEmpty()) {
-                return
-            }
-
-            val timelineEvent = matrixBot.getTimelineEvent(roomId, messageId) ?: return
-            matrixBot.room().sendMessage(roomId) {
-                reply(timelineEvent)
-                text("'${timer.content}' ${peopleToRemind.joinToString(", ")}")
-            }
-        } catch (e: Exception) {
-            logger.error("Error during remind: ${e.message}", e)
-        }
-    }
-
-    private data class TimerData(
-        val matrixBot: MatrixBot,
-        val roomId: RoomId,
-        val requestMessage: EventId,
-        val timeToRemind: LocalTime,
-        val content: String,
-        var botMessageId: EventId?
-    )
 }
