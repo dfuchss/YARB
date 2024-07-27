@@ -6,9 +6,7 @@ import net.folivo.trixnity.client.MatrixClient
 import net.folivo.trixnity.client.fromStore
 import net.folivo.trixnity.client.login
 import net.folivo.trixnity.clientserverapi.model.authentication.IdentifierType
-import net.folivo.trixnity.core.model.events.idOrNull
-import net.folivo.trixnity.core.model.events.roomIdOrNull
-import net.folivo.trixnity.core.model.events.senderOrNull
+import net.folivo.trixnity.core.model.events.m.room.RoomMessageEventContent
 import org.fuchss.matrix.bots.MatrixBot
 import org.fuchss.matrix.bots.command.ChangeUsernameCommand
 import org.fuchss.matrix.bots.command.Command
@@ -17,17 +15,13 @@ import org.fuchss.matrix.bots.command.LogoutCommand
 import org.fuchss.matrix.bots.command.QuitCommand
 import org.fuchss.matrix.bots.helper.createMediaStore
 import org.fuchss.matrix.bots.helper.createRepositoriesModule
-import org.fuchss.matrix.bots.helper.handleEncryptedTextMessage
-import org.fuchss.matrix.bots.helper.handleEncryptedTextMessageToCommand
-import org.fuchss.matrix.bots.helper.handleTextMessageToCommand
+import org.fuchss.matrix.bots.helper.decryptMessage
+import org.fuchss.matrix.bots.helper.handleCommand
+import org.fuchss.matrix.bots.helper.handleEncryptedCommand
 import org.fuchss.matrix.yarb.commands.ReminderCommand
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.Timer
 import kotlin.random.Random
-
-private val logger: Logger = LoggerFactory.getLogger(MatrixBot::class.java)
 
 private lateinit var commands: List<Command>
 
@@ -51,32 +45,26 @@ fun main() {
 
         val matrixBot = MatrixBot(matrixClient, config)
 
-        matrixBot.subscribeContent { event -> handleTextMessageToCommand(commands, event, matrixBot, config, ReminderCommand.COMMAND_NAME) }
-        matrixBot.subscribeContent {
-                encryptedEvent ->
-            handleEncryptedTextMessageToCommand(commands, encryptedEvent, matrixBot, config, ReminderCommand.COMMAND_NAME)
-        }
+        // Command Handling
+        matrixBot.subscribeContent { event -> handleCommand(commands, event, matrixBot, config, ReminderCommand.COMMAND_NAME) }
+        matrixBot.subscribeContent { encEvent -> handleEncryptedCommand(commands, encEvent, matrixBot, config, ReminderCommand.COMMAND_NAME) }
 
-        matrixBot.subscribeContent(listenNonUsers = true, listenBotEvents = true) { event ->
-            val eventId = event.idOrNull ?: return@subscribeContent
-            val sender = event.senderOrNull ?: return@subscribeContent
-            val roomId = event.roomIdOrNull ?: return@subscribeContent
-            reminderCommand.handleBotMessageForReminder(matrixBot, eventId, sender, roomId, event.content)
+        // Listen to own messages (i.e., reminder messages)
+        matrixBot.subscribeContent<RoomMessageEventContent.TextBased.Text>(listenNonUsers = true, listenBotEvents = true) { eventId, sender, roomId, content ->
+            reminderCommand.handleBotMessageForReminder(matrixBot, eventId, sender, roomId, content)
         }
         matrixBot.subscribeContent(listenNonUsers = true, listenBotEvents = true) { encryptedEvent ->
-            handleEncryptedTextMessage(encryptedEvent, matrixBot) { eventId, userId, roomId, text ->
+            decryptMessage(encryptedEvent, matrixBot) { eventId, userId, roomId, text ->
                 reminderCommand.handleBotMessageForReminder(matrixBot, eventId, userId, roomId, text)
             }
         }
 
-        matrixBot.subscribeContent { event ->
-            val eventId = event.idOrNull ?: return@subscribeContent
-            val sender = event.senderOrNull ?: return@subscribeContent
-            val roomId = event.roomIdOrNull ?: return@subscribeContent
-            reminderCommand.handleUserEditMessage(matrixBot, eventId, sender, roomId, event.content)
+        // Listen for edits of user messages
+        matrixBot.subscribeContent<RoomMessageEventContent.TextBased.Text> { eventId, sender, roomId, content ->
+            reminderCommand.handleUserEditMessage(matrixBot, eventId, sender, roomId, content)
         }
-        matrixBot.subscribeContent(listenNonUsers = true, listenBotEvents = true) { encryptedEvent ->
-            handleEncryptedTextMessage(encryptedEvent, matrixBot) { eventId, userId, roomId, text ->
+        matrixBot.subscribeContent { encryptedEvent ->
+            decryptMessage(encryptedEvent, matrixBot) { eventId, userId, roomId, text ->
                 reminderCommand.handleUserEditMessage(matrixBot, eventId, userId, roomId, text)
             }
         }

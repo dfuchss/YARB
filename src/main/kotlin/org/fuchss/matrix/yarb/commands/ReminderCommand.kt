@@ -6,7 +6,6 @@ import net.folivo.trixnity.client.room.getTimelineEventReactionAggregation
 import net.folivo.trixnity.client.room.message.react
 import net.folivo.trixnity.client.room.message.reply
 import net.folivo.trixnity.client.room.message.text
-import net.folivo.trixnity.client.store.TimelineEvent
 import net.folivo.trixnity.core.model.EventId
 import net.folivo.trixnity.core.model.RoomId
 import net.folivo.trixnity.core.model.UserId
@@ -15,10 +14,9 @@ import net.folivo.trixnity.core.model.events.m.RelationType
 import net.folivo.trixnity.core.model.events.m.room.RoomMessageEventContent
 import org.fuchss.matrix.bots.MatrixBot
 import org.fuchss.matrix.bots.command.Command
-import org.fuchss.matrix.bots.firstWithTimeout
+import org.fuchss.matrix.bots.matrixTo
 import org.fuchss.matrix.yarb.Config
 import org.fuchss.matrix.yarb.emoji
-import org.fuchss.matrix.yarb.matrixTo
 import java.time.LocalTime
 import java.util.Timer
 import java.util.TimerTask
@@ -86,7 +84,7 @@ class ReminderCommand(private val config: Config, private val timer: Timer) : Co
             return
         }
 
-        val timelineEvent = getTimelineEvent(matrixBot, roomId, textEventId) ?: return
+        val timelineEvent = matrixBot.getTimelineEvent(roomId, textEventId) ?: return
 
         val timerData = TimerData(matrixBot, roomId, textEventId, time, null)
         timers.add(timerData)
@@ -164,7 +162,7 @@ class ReminderCommand(private val config: Config, private val timer: Timer) : Co
                 return
             }
 
-            val timelineEvent = getTimelineEvent(matrixBot, roomId, messageId) ?: return
+            val timelineEvent = matrixBot.getTimelineEvent(roomId, messageId) ?: return
             matrixBot.room().sendMessage(roomId) {
                 reply(timelineEvent)
                 text("Reminder for ${peopleToRemind.joinToString(", ")}")
@@ -172,19 +170,6 @@ class ReminderCommand(private val config: Config, private val timer: Timer) : Co
         } catch (e: Exception) {
             logger.error("Error during remind: ${e.message}", e)
         }
-    }
-
-    private suspend fun getTimelineEvent(
-        matrixBot: MatrixBot,
-        roomId: RoomId,
-        eventId: EventId
-    ): TimelineEvent? {
-        val timelineEvent = matrixBot.room().getTimelineEvent(roomId, eventId).firstWithTimeout { it?.content != null }
-        if (timelineEvent == null) {
-            logger.error("Cannot get timeline event for $eventId within the given time ..")
-            return null
-        }
-        return timelineEvent
     }
 
     private data class TimerData(
