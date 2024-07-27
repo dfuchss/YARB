@@ -70,6 +70,7 @@ fun main() {
                 reminderCommand.handleUserEditMessage(matrixBot, eventId, userId, roomId, text)
             }
         }
+        matrixBot.subscribeContent { event -> reminderCommand.handleUserDeleteMessage(matrixBot, event) }
 
         val loggedOut = matrixBot.startBlocking()
         timer.cancel()

@@ -2,6 +2,7 @@ package org.fuchss.matrix.yarb
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.SerializationFeature
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
@@ -30,7 +31,7 @@ class TimerManager(private val matrixBot: MatrixBot, javaTimer: Timer, config: C
         private val logger = LoggerFactory.getLogger(TimerManager::class.java)
     }
 
-    private val objectMapper = ObjectMapper().registerKotlinModule().registerModule(JavaTimeModule())
+    private val objectMapper = ObjectMapper().registerKotlinModule().registerModule(JavaTimeModule()).enable(SerializationFeature.INDENT_OUTPUT)
     private val timerFileLocation = config.dataDirectory + "/timers.json"
     private val timers = mutableListOf<TimerData>()
 

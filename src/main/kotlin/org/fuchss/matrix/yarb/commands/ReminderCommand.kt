@@ -6,9 +6,13 @@ import net.folivo.trixnity.client.room.message.text
 import net.folivo.trixnity.core.model.EventId
 import net.folivo.trixnity.core.model.RoomId
 import net.folivo.trixnity.core.model.UserId
+import net.folivo.trixnity.core.model.events.ClientEvent
 import net.folivo.trixnity.core.model.events.m.RelatesTo
 import net.folivo.trixnity.core.model.events.m.RelationType
+import net.folivo.trixnity.core.model.events.m.room.RedactionEventContent
 import net.folivo.trixnity.core.model.events.m.room.RoomMessageEventContent
+import net.folivo.trixnity.core.model.events.roomIdOrNull
+import net.folivo.trixnity.core.model.events.senderOrNull
 import org.fuchss.matrix.bots.MatrixBot
 import org.fuchss.matrix.bots.command.Command
 import org.fuchss.matrix.yarb.Config
@@ -90,6 +94,19 @@ class ReminderCommand(private val config: Config, private val timerManager: Time
         matrixBot.room().sendMessage(roomId) {
             react(eventId, EMOJI)
         }
+    }
+
+    suspend fun handleUserDeleteMessage(
+        matrixBot: MatrixBot,
+        event: ClientEvent<RedactionEventContent>
+    ) {
+        if (event.senderOrNull == matrixBot.self()) {
+            return
+        }
+
+        val botMessage = timerManager.removeByRequestMessage(event.content.redacts) ?: return
+        val roomId = event.roomIdOrNull ?: return
+        matrixBot.roomApi().redactEvent(roomId, botMessage).getOrThrow()
     }
 
     suspend fun handleUserEditMessage(
