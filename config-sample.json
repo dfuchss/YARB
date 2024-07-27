@@ -1,0 +1,15 @@
+{
+    "prefix": "yarb",
+    "baseUrl": "https://matrix-client.matrix.org",
+    "username": "",
+    "password": "",
+    "dataDirectory": "./data/",
+    "admins": [
+        "@dominik:fuchss.org"
+    ],
+    "users": [
+        ":matrix.org",
+        ":fuchss.org"
+    ],
+    "offset_in_minutes": 0
+}
