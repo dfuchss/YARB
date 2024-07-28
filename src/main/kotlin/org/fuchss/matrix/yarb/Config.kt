@@ -12,7 +12,7 @@ import java.io.File
 
 /**
  * This is the configuration template of YARB.
- * @param[prefix] the command prefix the bot listens to. By default, "mensa"
+ * @param[prefix] the command prefix the bot listens to. By default, "yarb"
  * @param[baseUrl] the base url of the matrix server the bot shall use
  * @param[username] the username of the bot's account
  * @param[password] the password of the bot's account
@@ -21,7 +21,7 @@ import java.io.File
  * @param[offsetInMinutes] the offset for reminders in minutes. E.g. "5" means that the reminder will be sent 5 minutes before the actual time
  */
 data class Config(
-    @JsonProperty override val prefix: String = "mensa",
+    @JsonProperty override val prefix: String = "yarb",
     @JsonProperty override val baseUrl: String,
     @JsonProperty override val username: String,
     @JsonProperty override val password: String,
