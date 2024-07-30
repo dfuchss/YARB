@@ -7,14 +7,21 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import net.folivo.trixnity.client.room.getTimelineEventReactionAggregation
 import net.folivo.trixnity.client.room.message.reply
 import net.folivo.trixnity.client.room.message.text
+import net.folivo.trixnity.client.store.eventId
+import net.folivo.trixnity.client.store.relatesTo
+import net.folivo.trixnity.client.store.sender
 import net.folivo.trixnity.core.model.EventId
 import net.folivo.trixnity.core.model.RoomId
+import net.folivo.trixnity.core.model.events.m.RelatesTo
+import net.folivo.trixnity.core.model.events.m.RelationType
 import org.fuchss.matrix.bots.MatrixBot
 import org.fuchss.matrix.bots.emoji
+import org.fuchss.matrix.bots.firstWithTimeout
 import org.fuchss.matrix.bots.matrixTo
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -120,12 +127,43 @@ class TimerManager(private val matrixBot: MatrixBot, javaTimer: Timer, config: C
             }
 
             val timelineEvent = matrixBot.getTimelineEvent(roomId, messageId) ?: return
+
+            removeReactionOfBot(roomId, messageId)
+
             matrixBot.room().sendMessage(roomId) {
                 reply(timelineEvent)
                 text("'${timer.content}' ${peopleToRemind.joinToString(", ")}")
             }
         } catch (e: Exception) {
             logger.error("Error during remind: ${e.message}", e)
+        }
+    }
+
+    private suspend fun removeReactionOfBot(
+        roomId: RoomId,
+        messageId: EventId
+    ) {
+        val reactions =
+            matrixBot.room().getTimelineEventRelations(roomId, messageId, RelationType.Annotation)
+                .map { it?.keys.orEmpty() }
+                .map { relations ->
+                    relations.mapNotNull { matrixBot.getTimelineEvent(roomId, it) }
+                        .filter { it.sender == matrixBot.self() }
+                        .mapNotNull {
+                            val relatesTo = it.relatesTo
+                            if (relatesTo is RelatesTo.Annotation) {
+                                it.eventId to relatesTo.key
+                            } else {
+                                null
+                            }
+                        }
+                }.firstWithTimeout { it.isNotEmpty() } ?: return
+
+        val botReaction = reactions.find { it.second == EMOJI }
+        if (botReaction != null) {
+            matrixBot.roomApi().redactEvent(roomId, botReaction.first)
+        } else {
+            logger.warn("Could not find bot reaction to remove for message $messageId")
         }
     }
 

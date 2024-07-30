@@ -29,6 +29,7 @@ class ReminderCommand(private val config: Config, private val timerManager: Time
     override val help: String = "Set a reminder for a specific time."
     override val params: String = "<time|11:30> <message|Time for Lunch!>"
     override val name: String = COMMAND_NAME
+    override val autoAcknowledge: Boolean = false
 
     override suspend fun execute(
         matrixBot: MatrixBot,
