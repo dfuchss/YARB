@@ -6,10 +6,16 @@ import com.fasterxml.jackson.databind.SerializationFeature
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
-import net.folivo.trixnity.client.room.getTimelineEventReactionAggregation
+import kotlinx.coroutines.withTimeoutOrNull
+import net.folivo.trixnity.client.room.RoomService
+import net.folivo.trixnity.client.room.message.mentions
 import net.folivo.trixnity.client.room.message.reply
 import net.folivo.trixnity.client.room.message.text
 import net.folivo.trixnity.client.store.eventId
@@ -17,11 +23,11 @@ import net.folivo.trixnity.client.store.relatesTo
 import net.folivo.trixnity.client.store.sender
 import net.folivo.trixnity.core.model.EventId
 import net.folivo.trixnity.core.model.RoomId
+import net.folivo.trixnity.core.model.UserId
 import net.folivo.trixnity.core.model.events.m.RelatesTo
 import net.folivo.trixnity.core.model.events.m.RelationType
 import org.fuchss.matrix.bots.MatrixBot
 import org.fuchss.matrix.bots.emoji
-import org.fuchss.matrix.bots.firstWithTimeout
 import org.fuchss.matrix.bots.matrixTo
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -119,53 +125,69 @@ class TimerManager(private val matrixBot: MatrixBot, javaTimer: Timer, config: C
         try {
             val roomId = timer.roomId()
             val messageId = timer.botMessageId() ?: return
+            val timelineEvent = matrixBot.getTimelineEvent(roomId, messageId) ?: return
 
-            val reactions = matrixBot.room().getTimelineEventReactionAggregation(roomId, messageId).first().reactions
-            val peopleToRemind = reactions[EMOJI]?.filter { it != matrixBot.self() }?.map { it.matrixTo() }
-            if (peopleToRemind.isNullOrEmpty()) {
+            val remainingReactions = removeReactionOfBot(roomId, messageId)
+
+            if (remainingReactions.isEmpty()) {
                 return
             }
 
-            val timelineEvent = matrixBot.getTimelineEvent(roomId, messageId) ?: return
-
-            removeReactionOfBot(roomId, messageId)
-
             matrixBot.room().sendMessage(roomId) {
                 reply(timelineEvent)
-                text("'${timer.content}' ${peopleToRemind.joinToString(", ")}")
+                mentions(remainingReactions.toSet())
+                text("'${timer.content}' ${remainingReactions.joinToString(", ") { it.matrixTo() }}")
             }
         } catch (e: Exception) {
             logger.error("Error during remind: ${e.message}", e)
         }
     }
 
+    /**
+     * Remove the reaction of the bot from the message
+     * @return the list of users reacted to the message
+     */
     private suspend fun removeReactionOfBot(
         roomId: RoomId,
         messageId: EventId
-    ) {
-        val reactions =
-            matrixBot.room().getTimelineEventRelations(roomId, messageId, RelationType.Annotation)
-                .map { it?.keys.orEmpty() }
-                .map { relations ->
-                    relations.mapNotNull { matrixBot.getTimelineEvent(roomId, it) }
-                        .filter { it.sender == matrixBot.self() }
-                        .mapNotNull {
-                            val relatesTo = it.relatesTo
-                            if (relatesTo is RelatesTo.Annotation) {
-                                it.eventId to relatesTo.key
-                            } else {
-                                null
-                            }
-                        }
-                }.firstWithTimeout { it.isNotEmpty() } ?: return
+    ): List<UserId> {
+        val allReactions = matrixBot.room().getTimelineEventReactionAggregationWithIds(roomId, messageId).first()
 
-        val botReaction = reactions.find { it.second == EMOJI }
+        val reactions = allReactions[EMOJI] ?: return emptyList()
+
+        val botReaction = reactions.find { it.second == matrixBot.self() }
         if (botReaction != null) {
             matrixBot.roomApi().redactEvent(roomId, botReaction.first)
         } else {
             logger.warn("Could not find bot reaction to remove for message $messageId")
         }
+        return reactions.filter { it.second != matrixBot.self() }.map { it.second }
     }
+
+    // Adapted from net/folivo/trixnity/client/room/TimelineEventAggregation.kt
+    private fun RoomService.getTimelineEventReactionAggregationWithIds(
+        roomId: RoomId,
+        eventId: EventId
+    ): Flow<Map<String, Set<Pair<EventId, UserId>>>> =
+        getTimelineEventRelations(roomId, eventId, RelationType.Annotation)
+            .map { it?.keys.orEmpty() }
+            .map { relations ->
+                coroutineScope {
+                    relations.map { relatedEvent ->
+                        async {
+                            withTimeoutOrNull(1.minutes) { getTimelineEvent(roomId, relatedEvent).first() }
+                        }
+                    }.awaitAll()
+                }.filterNotNull()
+                    .mapNotNull {
+                        val relatesTo = it.relatesTo as? RelatesTo.Annotation ?: return@mapNotNull null
+                        val key = relatesTo.key ?: return@mapNotNull null
+                        key to (it.eventId to it.sender)
+                    }
+                    .distinct()
+                    .groupBy { it.first }
+                    .mapValues { entry -> entry.value.map { it.second }.toSet() }
+            }
 
     private data class TimerData(
         @JsonProperty val roomId: String,
