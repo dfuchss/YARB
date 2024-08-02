@@ -11,12 +11,12 @@ import net.folivo.trixnity.core.model.events.m.RelatesTo
 import net.folivo.trixnity.core.model.events.m.RelationType
 import net.folivo.trixnity.core.model.events.m.room.RedactionEventContent
 import net.folivo.trixnity.core.model.events.m.room.RoomMessageEventContent
-import net.folivo.trixnity.core.model.events.roomIdOrNull
 import net.folivo.trixnity.core.model.events.senderOrNull
 import org.fuchss.matrix.bots.MatrixBot
 import org.fuchss.matrix.bots.command.Command
 import org.fuchss.matrix.yarb.Config
 import org.fuchss.matrix.yarb.TimerManager
+import org.fuchss.matrix.yarb.getMessageId
 import java.time.LocalTime
 
 class ReminderCommand(private val config: Config, private val timerManager: TimerManager) : Command() {
@@ -38,6 +38,17 @@ class ReminderCommand(private val config: Config, private val timerManager: Time
         parameters: String,
         textEventId: EventId,
         textEvent: RoomMessageEventContent.TextBased.Text
+    ) {
+        // Handle New Messages
+        execute(matrixBot, roomId, parameters, textEventId, textEventId)
+    }
+
+    private suspend fun execute(
+        matrixBot: MatrixBot,
+        roomId: RoomId,
+        parameters: String,
+        currentMessageEventId: EventId,
+        initialMessageEventId: EventId
     ) {
         val timeXmessage = parameters.split(" ", limit = 2)
         if (timeXmessage.size != 2) {
@@ -61,40 +72,35 @@ class ReminderCommand(private val config: Config, private val timerManager: Time
             return
         }
 
-        val timelineEvent = matrixBot.getTimelineEvent(roomId, textEventId) ?: return
-        timerManager.addTimer(roomId, textEventId, time, timeXmessage[1])
+        logger.debug("Reminder for {} with '{}'", time, timeXmessage[1])
 
-        matrixBot.room().sendMessage(roomId) {
-            reply(timelineEvent)
-            text("I'll remind all people at $time with '${timeXmessage[1]}'. If you want to receive a message please click on $EMOJI")
-        }
-    }
-
-    suspend fun handleBotMessageForReminder(
-        matrixBot: MatrixBot,
-        eventId: EventId,
-        sender: UserId,
-        roomId: RoomId,
-        textEvent: RoomMessageEventContent.TextBased.Text
-    ) {
-        if (sender != matrixBot.self()) {
+        val botMessageTransactionId =
+            matrixBot.room().sendMessage(roomId) {
+                reply(initialMessageEventId, null)
+                text("I'll remind all people at $time with '${timeXmessage[1]}'. If you want to receive a message please click on $EMOJI")
+            }
+        logger.debug("Bot Message TransactionId: {}", botMessageTransactionId)
+        val botMessageId = matrixBot.room().getMessageId(botMessageTransactionId)
+        if (botMessageId == null) {
+            logger.error("Could not send bot message :( -- TransactionId: {}", botMessageTransactionId)
             return
         }
+        logger.debug("Bot Message Id: {}", botMessageId)
 
-        val relatesTo = textEvent.relatesTo ?: return
-
-        if (relatesTo.relationType != RelationType.Reply) {
+        val botReactionMessageTransactionId =
+            matrixBot.room().sendMessage(roomId) {
+                react(botMessageId, EMOJI)
+            }
+        logger.debug("Bot Reaction Message TransactionId: {}", botReactionMessageTransactionId)
+        val botReactionMessageId = matrixBot.room().getMessageId(botReactionMessageTransactionId)
+        if (botReactionMessageId == null) {
+            logger.error("Could not send bot reaction message :( -- TransactionId: {}", botReactionMessageTransactionId)
             return
         }
+        logger.debug("Bot Reaction Message Id: {}", botReactionMessageId)
 
-        val isRelated = timerManager.addBotMessageToTimer(relatesTo.eventId, eventId)
-        if (!isRelated) {
-            return
-        }
-
-        matrixBot.room().sendMessage(roomId) {
-            react(eventId, EMOJI)
-        }
+        val timer = TimerManager.TimerData(roomId, initialMessageEventId, currentMessageEventId, time, timeXmessage[1], botMessageId, botReactionMessageId)
+        timerManager.addTimer(timer)
     }
 
     suspend fun handleUserDeleteMessage(
@@ -104,10 +110,8 @@ class ReminderCommand(private val config: Config, private val timerManager: Time
         if (event.senderOrNull == matrixBot.self()) {
             return
         }
-
-        val botMessage = timerManager.removeByRequestMessage(event.content.redacts) ?: return
-        val roomId = event.roomIdOrNull ?: return
-        matrixBot.roomApi().redactEvent(roomId, botMessage).getOrThrow()
+        val timer = timerManager.removeByOriginalRequestMessage(event.content.redacts) ?: return
+        timer.redactAll(matrixBot)
     }
 
     suspend fun handleUserEditMessage(
@@ -117,15 +121,15 @@ class ReminderCommand(private val config: Config, private val timerManager: Time
         roomId: RoomId,
         textEvent: RoomMessageEventContent.TextBased.Text
     ) {
+        logger.debug("Edit Message: {}", textEvent)
         val relatesTo = textEvent.relatesTo ?: return
 
         if (relatesTo.relationType != RelationType.Replace) {
             return
         }
 
-        val relatedBotMessage = this.timerManager.removeByRequestMessage(relatesTo.eventId) ?: return
-
-        matrixBot.roomApi().redactEvent(roomId, relatedBotMessage).getOrThrow()
+        val timer = this.timerManager.removeByOriginalRequestMessage(relatesTo.eventId) ?: return
+        timer.redactAll(matrixBot)
 
         val replace = (textEvent.relatesTo as? RelatesTo.Replace) ?: return
         val newBody = (replace.newContent as? RoomMessageEventContent.TextBased.Text)?.body ?: return
@@ -134,6 +138,6 @@ class ReminderCommand(private val config: Config, private val timerManager: Time
         if (parameters.startsWith(COMMAND_NAME)) {
             parameters = parameters.substring(COMMAND_NAME.length).trim()
         }
-        execute(matrixBot, senderId, roomId, parameters, replace.eventId, textEvent)
+        execute(matrixBot, roomId, parameters, eventId, relatesTo.eventId)
     }
 }

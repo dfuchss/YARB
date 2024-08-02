@@ -6,26 +6,15 @@ import com.fasterxml.jackson.databind.SerializationFeature
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
-import net.folivo.trixnity.client.room.RoomService
+import net.folivo.trixnity.client.room.getTimelineEventReactionAggregation
 import net.folivo.trixnity.client.room.message.mentions
 import net.folivo.trixnity.client.room.message.reply
 import net.folivo.trixnity.client.room.message.text
-import net.folivo.trixnity.client.store.eventId
-import net.folivo.trixnity.client.store.relatesTo
-import net.folivo.trixnity.client.store.sender
 import net.folivo.trixnity.core.model.EventId
 import net.folivo.trixnity.core.model.RoomId
 import net.folivo.trixnity.core.model.UserId
-import net.folivo.trixnity.core.model.events.m.RelatesTo
-import net.folivo.trixnity.core.model.events.m.RelationType
 import org.fuchss.matrix.bots.MatrixBot
 import org.fuchss.matrix.bots.emoji
 import org.fuchss.matrix.bots.matrixTo
@@ -36,7 +25,7 @@ import java.nio.file.StandardCopyOption
 import java.time.LocalTime
 import java.util.Timer
 import java.util.TimerTask
-import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 class TimerManager(private val matrixBot: MatrixBot, javaTimer: Timer, config: Config) {
     companion object {
@@ -76,36 +65,20 @@ class TimerManager(private val matrixBot: MatrixBot, javaTimer: Timer, config: C
                 }
             },
             millisecondsToNextMinute,
-            1.minutes.inWholeMilliseconds
+            30.seconds.inWholeMilliseconds
         )
     }
 
-    fun addTimer(
-        roomId: RoomId,
-        requestMessage: EventId,
-        timeToRemind: LocalTime,
-        content: String
-    ) {
-        val timer = TimerData(roomId.full, requestMessage.full, timeToRemind, content, null)
+    fun addTimer(timer: TimerData) {
         timers.add(timer)
         saveTimers()
     }
 
-    fun addBotMessageToTimer(
-        requestMessage: EventId,
-        botMessageId: EventId
-    ): Boolean {
-        val timer = timers.find { it.requestMessage() == requestMessage } ?: return false
-        timer.botMessageId = botMessageId.full
+    fun removeByOriginalRequestMessage(eventId: EventId): TimerData? {
+        val timer = timers.find { it.originalRequestMessage() == eventId } ?: return null
+        timers.remove(timer)
         saveTimers()
-        return true
-    }
-
-    fun removeByRequestMessage(eventId: EventId): EventId? {
-        val timerData = timers.find { it.requestMessage() == eventId } ?: return null
-        timers.remove(timerData)
-        saveTimers()
-        return timerData.botMessageId()
+        return timer
     }
 
     private fun removeTimer(timer: TimerData) {
@@ -123,18 +96,13 @@ class TimerManager(private val matrixBot: MatrixBot, javaTimer: Timer, config: C
 
     private suspend fun remind(timer: TimerData) {
         try {
-            val roomId = timer.roomId()
-            val messageId = timer.botMessageId() ?: return
-            val timelineEvent = matrixBot.getTimelineEvent(roomId, messageId) ?: return
-
-            val remainingReactions = removeReactionOfBot(roomId, messageId)
-
+            val remainingReactions = removeReactionOfBot(timer)
             if (remainingReactions.isEmpty()) {
                 return
             }
 
-            matrixBot.room().sendMessage(roomId) {
-                reply(timelineEvent)
+            matrixBot.room().sendMessage(timer.roomId()) {
+                reply(timer.botMessageId(), null)
                 mentions(remainingReactions.toSet())
                 text("'${timer.content}' ${remainingReactions.joinToString(", ") { it.matrixTo() }}")
             }
@@ -147,59 +115,58 @@ class TimerManager(private val matrixBot: MatrixBot, javaTimer: Timer, config: C
      * Remove the reaction of the bot from the message
      * @return the list of users reacted to the message
      */
-    private suspend fun removeReactionOfBot(
-        roomId: RoomId,
-        messageId: EventId
-    ): List<UserId> {
-        val allReactions = matrixBot.room().getTimelineEventReactionAggregationWithIds(roomId, messageId).first()
+    private suspend fun removeReactionOfBot(timer: TimerData): List<UserId> {
+        timer.redactBotReaction(matrixBot)
 
+        val allReactions = matrixBot.room().getTimelineEventReactionAggregation(timer.roomId(), timer.botMessageId()).first().reactions
         val reactions = allReactions[EMOJI] ?: return emptyList()
-
-        val botReaction = reactions.find { it.second == matrixBot.self() }
-        if (botReaction != null) {
-            matrixBot.roomApi().redactEvent(roomId, botReaction.first)
-        } else {
-            logger.warn("Could not find bot reaction to remove for message $messageId")
-        }
-        return reactions.filter { it.second != matrixBot.self() }.map { it.second }
+        return reactions.filter { it != matrixBot.self() }
     }
 
-    // Adapted from net/folivo/trixnity/client/room/TimelineEventAggregation.kt
-    private fun RoomService.getTimelineEventReactionAggregationWithIds(
-        roomId: RoomId,
-        eventId: EventId
-    ): Flow<Map<String, Set<Pair<EventId, UserId>>>> =
-        getTimelineEventRelations(roomId, eventId, RelationType.Annotation)
-            .map { it?.keys.orEmpty() }
-            .map { relations ->
-                coroutineScope {
-                    relations.map { relatedEvent ->
-                        async {
-                            withTimeoutOrNull(1.minutes) { getTimelineEvent(roomId, relatedEvent).first() }
-                        }
-                    }.awaitAll()
-                }.filterNotNull()
-                    .mapNotNull {
-                        val relatesTo = it.relatesTo as? RelatesTo.Annotation ?: return@mapNotNull null
-                        val key = relatesTo.key ?: return@mapNotNull null
-                        key to (it.eventId to it.sender)
-                    }
-                    .distinct()
-                    .groupBy { it.first }
-                    .mapValues { entry -> entry.value.map { it.second }.toSet() }
-            }
-
-    private data class TimerData(
+    data class TimerData(
         @JsonProperty val roomId: String,
-        @JsonProperty val requestMessage: String,
+        @JsonProperty val originalRequestMessage: String,
+        @JsonProperty val currentRequestMessage: String,
         @JsonProperty val timeToRemind: LocalTime,
         @JsonProperty val content: String,
-        @JsonProperty var botMessageId: String?
+        @JsonProperty val botMessageId: String,
+        @JsonProperty val botReactionMessageId: String
     ) {
+        constructor(
+            roomId: RoomId,
+            originalRequestMessage: EventId,
+            currentRequestMessage: EventId,
+            timeToRemind: LocalTime,
+            content: String,
+            botMessageId: EventId,
+            botReactionMessageId: EventId
+        ) : this(
+            roomId.full,
+            originalRequestMessage.full,
+            currentRequestMessage.full,
+            timeToRemind,
+            content,
+            botMessageId.full,
+            botReactionMessageId.full
+        )
+
         fun roomId() = RoomId(roomId)
 
-        fun requestMessage() = EventId(requestMessage)
+        fun originalRequestMessage() = EventId(originalRequestMessage)
 
-        fun botMessageId() = botMessageId?.let { EventId(it) }
+        fun currentRequestMessage() = EventId(currentRequestMessage)
+
+        fun botMessageId() = EventId(botMessageId)
+
+        fun botReactionMessageId() = EventId(botReactionMessageId)
+
+        suspend fun redactAll(matrixBot: MatrixBot) {
+            redactBotReaction(matrixBot)
+            matrixBot.roomApi().redactEvent(roomId(), botMessageId())
+        }
+
+        suspend fun redactBotReaction(matrixBot: MatrixBot) {
+            matrixBot.roomApi().redactEvent(roomId(), botReactionMessageId())
+        }
     }
 }

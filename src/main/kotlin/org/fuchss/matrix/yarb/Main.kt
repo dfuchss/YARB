@@ -51,16 +51,6 @@ fun main() {
         matrixBot.subscribeContent { event -> handleCommand(commands, event, matrixBot, config, ReminderCommand.COMMAND_NAME) }
         matrixBot.subscribeContent { encEvent -> handleEncryptedCommand(commands, encEvent, matrixBot, config, ReminderCommand.COMMAND_NAME) }
 
-        // Listen to own messages (i.e., reminder messages)
-        matrixBot.subscribeContent<RoomMessageEventContent.TextBased.Text>(listenNonUsers = true, listenBotEvents = true) { eventId, sender, roomId, content ->
-            reminderCommand.handleBotMessageForReminder(matrixBot, eventId, sender, roomId, content)
-        }
-        matrixBot.subscribeContent(listenNonUsers = true, listenBotEvents = true) { encryptedEvent ->
-            decryptMessage(encryptedEvent, matrixBot) { eventId, userId, roomId, text ->
-                reminderCommand.handleBotMessageForReminder(matrixBot, eventId, userId, roomId, text)
-            }
-        }
-
         // Listen for edits of user messages
         matrixBot.subscribeContent<RoomMessageEventContent.TextBased.Text> { eventId, sender, roomId, content ->
             reminderCommand.handleUserEditMessage(matrixBot, eventId, sender, roomId, content)
@@ -73,9 +63,10 @@ fun main() {
         matrixBot.subscribeContent { event -> reminderCommand.handleUserDeleteMessage(matrixBot, event) }
 
         val loggedOut = matrixBot.startBlocking()
-        timer.cancel()
 
         // After Shutdown
+        timer.cancel()
+
         if (loggedOut) {
             // Cleanup database
             val databaseFiles = listOf(File(config.dataDirectory + "/database.mv.db"), File(config.dataDirectory + "/database.trace.db"))
