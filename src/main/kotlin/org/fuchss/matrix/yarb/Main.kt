@@ -83,14 +83,15 @@ private suspend fun getMatrixClient(config: Config): MatrixClient {
     }
 
     val matrixClient =
-        MatrixClient.login(
-            baseUrl = Url(config.baseUrl),
-            identifier = IdentifierType.User(config.username),
-            password = config.password,
-            repositoriesModule = createRepositoriesModule(config),
-            mediaStore = createMediaStore(config),
-            initialDeviceDisplayName = "${MatrixBot::class.java.`package`.name}-${Random.Default.nextInt()}"
-        ).getOrThrow()
+        MatrixClient
+            .login(
+                baseUrl = Url(config.baseUrl),
+                identifier = IdentifierType.User(config.username),
+                password = config.password,
+                repositoriesModule = createRepositoriesModule(config),
+                mediaStore = createMediaStore(config),
+                initialDeviceDisplayName = "${MatrixBot::class.java.`package`.name}-${Random.Default.nextInt()}"
+            ).getOrThrow()
 
     return matrixClient
 }

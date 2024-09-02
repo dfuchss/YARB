@@ -27,7 +27,11 @@ import java.util.Timer
 import java.util.TimerTask
 import kotlin.time.Duration.Companion.seconds
 
-class TimerManager(private val matrixBot: MatrixBot, javaTimer: Timer, config: Config) {
+class TimerManager(
+    private val matrixBot: MatrixBot,
+    javaTimer: Timer,
+    config: Config
+) {
     companion object {
         val EMOJI = ":+1:".emoji()
         private val logger = LoggerFactory.getLogger(TimerManager::class.java)
@@ -118,7 +122,12 @@ class TimerManager(private val matrixBot: MatrixBot, javaTimer: Timer, config: C
     private suspend fun removeReactionOfBot(timer: TimerData): List<UserId> {
         timer.redactBotReaction(matrixBot)
 
-        val allReactions = matrixBot.room().getTimelineEventReactionAggregation(timer.roomId(), timer.botMessageId()).first().reactions
+        val allReactions =
+            matrixBot
+                .room()
+                .getTimelineEventReactionAggregation(timer.roomId(), timer.botMessageId())
+                .first()
+                .reactions
         val reactions = allReactions[EMOJI] ?: return emptyList()
         return reactions.filter { it != matrixBot.self() }
     }

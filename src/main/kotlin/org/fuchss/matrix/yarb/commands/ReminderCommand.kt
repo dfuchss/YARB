@@ -19,7 +19,10 @@ import org.fuchss.matrix.yarb.TimerManager
 import org.fuchss.matrix.yarb.getMessageId
 import java.time.LocalTime
 
-class ReminderCommand(private val config: Config, private val timerManager: TimerManager) : Command() {
+class ReminderCommand(
+    private val config: Config,
+    private val timerManager: TimerManager
+) : Command() {
     companion object {
         const val COMMAND_NAME = "new"
         private val TIME_REGEX = Regex("^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$")
@@ -63,7 +66,8 @@ class ReminderCommand(private val config: Config, private val timerManager: Time
         val time = LocalTime.parse(timeXmessage[0]).withSecond(0).minusMinutes(config.offsetInMinutes)
         val now = LocalTime.now()
         if (now.isAfter(time)) {
-            matrixBot.room()
+            matrixBot
+                .room()
                 .sendMessage(roomId) {
                     text(
                         "Time $time is in the past. I can only remind you at the same day :) Also remember that I'll inform you ${config.offsetInMinutes} min before :)"
