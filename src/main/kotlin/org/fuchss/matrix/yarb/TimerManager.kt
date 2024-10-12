@@ -12,6 +12,7 @@ import net.folivo.trixnity.client.room.getTimelineEventReactionAggregation
 import net.folivo.trixnity.client.room.message.mentions
 import net.folivo.trixnity.client.room.message.reply
 import net.folivo.trixnity.client.room.message.text
+import net.folivo.trixnity.client.store.sender
 import net.folivo.trixnity.core.model.EventId
 import net.folivo.trixnity.core.model.RoomId
 import net.folivo.trixnity.core.model.UserId
@@ -129,7 +130,7 @@ class TimerManager(
                 .first()
                 .reactions
         val reactions = allReactions[EMOJI] ?: return emptyList()
-        return reactions.filter { it != matrixBot.self() }
+        return reactions.map { it.sender }.filter { it != matrixBot.self() }
     }
 
     data class TimerData(
