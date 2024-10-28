@@ -84,7 +84,7 @@ class ReminderCommand(
                 text("I'll remind all people at $time with '${timeXmessage[1]}'. If you want to receive a message please click on $EMOJI")
             }
         logger.debug("Bot Message TransactionId: {}", botMessageTransactionId)
-        val botMessageId = matrixBot.room().getMessageId(botMessageTransactionId)
+        val botMessageId = matrixBot.room().getMessageId(roomId, botMessageTransactionId)
         if (botMessageId == null) {
             logger.error("Could not send bot message :( -- TransactionId: {}", botMessageTransactionId)
             return
@@ -96,7 +96,7 @@ class ReminderCommand(
                 react(botMessageId, EMOJI)
             }
         logger.debug("Bot Reaction Message TransactionId: {}", botReactionMessageTransactionId)
-        val botReactionMessageId = matrixBot.room().getMessageId(botReactionMessageTransactionId)
+        val botReactionMessageId = matrixBot.room().getMessageId(roomId, botReactionMessageTransactionId)
         if (botReactionMessageId == null) {
             logger.error("Could not send bot reaction message :( -- TransactionId: {}", botReactionMessageTransactionId)
             return
