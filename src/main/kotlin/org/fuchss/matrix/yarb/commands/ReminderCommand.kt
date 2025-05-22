@@ -26,7 +26,6 @@ class ReminderCommand(
     companion object {
         const val COMMAND_NAME = "new"
         private val TIME_REGEX = Regex("^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$")
-        private val EMOJI = TimerManager.EMOJI
     }
 
     override val help: String = "Set a reminder for a specific time."
@@ -53,7 +52,7 @@ class ReminderCommand(
         currentMessageEventId: EventId,
         initialMessageEventId: EventId
     ) {
-        val timeXmessage = parameters.split(" ", limit = 2)
+        val timeXmessage = parameters.split(" ", "\n", limit = 2)
         if (timeXmessage.size != 2) {
             matrixBot.room().sendMessage(roomId) { text("Time not found. Please use commands like '!${config.prefix} 09:00 Time to Work!'") }
             return
@@ -78,10 +77,15 @@ class ReminderCommand(
 
         logger.debug("Reminder for {} with '{}'", time, timeXmessage[1])
 
+        val emojiToMessage = parseEmojiToMessage(timeXmessage[1])
+
         val botMessageTransactionId =
             matrixBot.room().sendMessage(roomId) {
                 reply(initialMessageEventId, null)
-                text("I'll remind all people at $time with '${timeXmessage[1]}'. If you want to receive a message please click on $EMOJI")
+
+                val header = "I'll remind all people at $time.${if (emojiToMessage.size > 1) "\n\n" else " "}"
+                val options = emojiToMessage.map { (emoji, message) -> "Use '$emoji' for $message" }.joinToString("\n")
+                text(header + options)
             }
         logger.debug("Bot Message TransactionId: {}", botMessageTransactionId)
         val botMessageId = matrixBot.room().getMessageId(roomId, botMessageTransactionId)
@@ -91,20 +95,50 @@ class ReminderCommand(
         }
         logger.debug("Bot Message Id: {}", botMessageId)
 
-        val botReactionMessageTransactionId =
-            matrixBot.room().sendMessage(roomId) {
-                react(botMessageId, EMOJI)
+        val botReactionMessageTransactionIds =
+            emojiToMessage.map {
+                matrixBot.room().sendMessage(roomId) {
+                    react(botMessageId, it.key)
+                }
             }
-        logger.debug("Bot Reaction Message TransactionId: {}", botReactionMessageTransactionId)
-        val botReactionMessageId = matrixBot.room().getMessageId(roomId, botReactionMessageTransactionId)
-        if (botReactionMessageId == null) {
-            logger.error("Could not send bot reaction message :( -- TransactionId: {}", botReactionMessageTransactionId)
+        logger.debug("Bot Reaction Message TransactionIds: {}", botReactionMessageTransactionIds)
+        val botReactionMessageIds = botReactionMessageTransactionIds.map { matrixBot.room().getMessageId(roomId, it) }
+        if (botReactionMessageIds.any { it == null }) {
+            logger.error("Could not send bot reaction message :( -- TransactionIds: {}", botReactionMessageTransactionIds)
+            matrixBot.roomApi().redactEvent(roomId, botMessageId).getOrNull()
+            matrixBot.room().sendMessage(roomId) {
+                text("Run into server rate limits. Please use less emojis :/")
+            }
             return
         }
-        logger.debug("Bot Reaction Message Id: {}", botReactionMessageId)
+        logger.debug("Bot Reaction Message Ids: {}", botReactionMessageIds)
 
-        val timer = TimerManager.TimerData(roomId, initialMessageEventId, currentMessageEventId, time, timeXmessage[1], botMessageId, botReactionMessageId)
+        val timer =
+            TimerManager.TimerData(
+                roomId,
+                initialMessageEventId,
+                currentMessageEventId,
+                time,
+                botMessageId,
+                botReactionMessageIds.map { it!! },
+                emojiToMessage
+            )
         timerManager.addTimer(timer)
+    }
+
+    private fun parseEmojiToMessage(content: String): Map<String, String> {
+        val lines = content.lines().map { it.trim() }.filter { !it.isBlank() }
+        if (lines.size <= 1) {
+            return mapOf(TimerManager.DEFAULT_REACTION to content)
+        }
+
+        // Check that lines are structured like "Emoji:Option"
+        val options = lines.map { it.split(":", limit = 2) }
+        if (options.any { it.size != 2 }) {
+            return mapOf(TimerManager.DEFAULT_REACTION to content)
+        }
+
+        return options.associate { it[0].trim() to it[1].trim() }
     }
 
     suspend fun handleUserDeleteMessage(

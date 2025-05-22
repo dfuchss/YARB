@@ -11,13 +11,13 @@ import kotlinx.coroutines.runBlocking
 import net.folivo.trixnity.client.room.getTimelineEventReactionAggregation
 import net.folivo.trixnity.client.room.message.mentions
 import net.folivo.trixnity.client.room.message.reply
-import net.folivo.trixnity.client.room.message.text
 import net.folivo.trixnity.client.store.sender
 import net.folivo.trixnity.core.model.EventId
 import net.folivo.trixnity.core.model.RoomId
 import net.folivo.trixnity.core.model.UserId
 import org.fuchss.matrix.bots.MatrixBot
 import org.fuchss.matrix.bots.emoji
+import org.fuchss.matrix.bots.markdown
 import org.fuchss.matrix.bots.matrixTo
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -34,8 +34,8 @@ class TimerManager(
     config: Config
 ) {
     companion object {
-        val EMOJI = ":+1:".emoji()
         private val logger = LoggerFactory.getLogger(TimerManager::class.java)
+        val DEFAULT_REACTION = ":+1:".emoji()
     }
 
     private val objectMapper = ObjectMapper().registerKotlinModule().registerModule(JavaTimeModule()).enable(SerializationFeature.INDENT_OUTPUT)
@@ -101,15 +101,21 @@ class TimerManager(
 
     private suspend fun remind(timer: TimerData) {
         try {
-            val remainingReactions = removeReactionOfBot(timer)
+            val(remainingReactions, emojiCount) = removeReactionOfBot(timer)
             if (remainingReactions.isEmpty()) {
                 return
             }
 
+            val maxReactions = emojiCount.values.max()
+
             matrixBot.room().sendMessage(timer.roomId()) {
                 reply(timer.botMessageId(), null)
                 mentions(remainingReactions.toSet())
-                text("'${timer.content}' ${remainingReactions.joinToString(", ") { it.matrixTo() }}")
+                markdown(
+                    "${emojiCount.filter {it.value >= maxReactions }.map { "* " + timer.emojiToMessage[it.key] }.joinToString(
+                        "\n"
+                    )}\n\n${remainingReactions.joinToString(", ") { it.matrixTo() }}"
+                )
             }
         } catch (e: Exception) {
             logger.error("Error during remind: ${e.message}", e)
@@ -120,7 +126,7 @@ class TimerManager(
      * Remove the reaction of the bot from the message
      * @return the list of users reacted to the message
      */
-    private suspend fun removeReactionOfBot(timer: TimerData): List<UserId> {
+    private suspend fun removeReactionOfBot(timer: TimerData): Pair<List<UserId>, Map<String, Int>> {
         timer.redactBotReaction(matrixBot)
 
         val allReactions =
@@ -129,8 +135,19 @@ class TimerManager(
                 .getTimelineEventReactionAggregation(timer.roomId(), timer.botMessageId())
                 .first()
                 .reactions
-        val reactions = allReactions[EMOJI] ?: return emptyList()
-        return reactions.map { it.sender }.filter { it != matrixBot.self() }
+
+        val users =
+            timer.emojiToMessage.keys
+                .flatMap { allReactions[it] ?: emptyList() }
+                .map { it.sender }
+                .filter { it != matrixBot.self() }
+                .distinct()
+        val countsOfEmojis =
+            timer.emojiToMessage.keys
+                .map { it to (allReactions[it] ?: emptyList()) }
+                .map { (emoji, reactions) -> emoji to reactions.filter { reaction -> reaction.sender != matrixBot.self() } }
+                .associate { (emoji, reactions) -> emoji to reactions.size }
+        return users to countsOfEmojis
     }
 
     data class TimerData(
@@ -138,37 +155,35 @@ class TimerManager(
         @JsonProperty val originalRequestMessage: String,
         @JsonProperty val currentRequestMessage: String,
         @JsonProperty val timeToRemind: LocalTime,
-        @JsonProperty val content: String,
         @JsonProperty val botMessageId: String,
-        @JsonProperty val botReactionMessageId: String
+        @JsonProperty val botReactionMessageIds: List<String>,
+        @JsonProperty val emojiToMessage: Map<String, String>
     ) {
         constructor(
             roomId: RoomId,
             originalRequestMessage: EventId,
             currentRequestMessage: EventId,
             timeToRemind: LocalTime,
-            content: String,
             botMessageId: EventId,
-            botReactionMessageId: EventId
+            botReactionMessageIds: List<EventId>,
+            emojiToMessage: Map<String, String>
         ) : this(
             roomId.full,
             originalRequestMessage.full,
             currentRequestMessage.full,
             timeToRemind,
-            content,
             botMessageId.full,
-            botReactionMessageId.full
+            botReactionMessageIds.map { it.full },
+            emojiToMessage
         )
 
         fun roomId() = RoomId(roomId)
 
         fun originalRequestMessage() = EventId(originalRequestMessage)
 
-        fun currentRequestMessage() = EventId(currentRequestMessage)
-
         fun botMessageId() = EventId(botMessageId)
 
-        fun botReactionMessageId() = EventId(botReactionMessageId)
+        fun botReactionMessageIds() = botReactionMessageIds.map { EventId(it) }
 
         suspend fun redactAll(matrixBot: MatrixBot) {
             redactBotReaction(matrixBot)
@@ -176,7 +191,7 @@ class TimerManager(
         }
 
         suspend fun redactBotReaction(matrixBot: MatrixBot) {
-            matrixBot.roomApi().redactEvent(roomId(), botReactionMessageId())
+            botReactionMessageIds().forEach { matrixBot.roomApi().redactEvent(roomId(), it) }
         }
     }
 }
