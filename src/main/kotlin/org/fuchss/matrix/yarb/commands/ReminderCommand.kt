@@ -128,7 +128,7 @@ class ReminderCommand(
 
     private fun parseEmojiToMessage(content: String): Map<String, String> {
         val lines = content.lines().map { it.trim() }.filter { !it.isBlank() }
-        if (lines.size <= 1) {
+        if (lines.isEmpty()) {
             return mapOf(TimerManager.DEFAULT_REACTION to content)
         }
 
