@@ -134,7 +134,7 @@ class ReminderCommand(
 
         // Check that lines are structured like "Emoji:Option"
         val options = lines.map { it.split(":", limit = 2) }
-        if (options.any { it.size != 2 }) {
+        if (options.any { it.size != 2 || it[0].isBlank() || it[1].isBlank() }) {
             return mapOf(TimerManager.DEFAULT_REACTION to content)
         }
 
