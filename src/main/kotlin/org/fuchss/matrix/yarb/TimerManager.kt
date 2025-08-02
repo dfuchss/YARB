@@ -93,7 +93,7 @@ class TimerManager(
 
     @Synchronized
     private fun saveTimers() {
-        val tempFile = File(timerFileLocation + ".tmp")
+        val tempFile = File("$timerFileLocation.tmp")
         objectMapper.writeValue(tempFile, timers)
         val timerFile = File(timerFileLocation)
         Files.move(tempFile.toPath(), timerFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
